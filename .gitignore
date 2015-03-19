@@ -1,4 +1,5 @@
 *.csv
+*.bak
 modelSave/
 swarmTemp/
 *rolling
