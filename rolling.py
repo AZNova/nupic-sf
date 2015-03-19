@@ -9,16 +9,19 @@ import sys
 
 
 def run():
-    df = pd.read_csv('out.csv', parse_dates=['timestamp'],
+    df = pd.read_csv('out-week7.csv', parse_dates=['timestamp'],
             header=0, skiprows=[1,2], index_col='timestamp')
     rm = pd.rolling_mean(df.resample("60Min", fill_method="ffill"), 
             window=3, min_periods=1)
     df['traffic'].plot()
-    #rm['traffic'].plot()
+    rm['traffic'].plot()
     # pylab.ion()
     pylab.show()
 
-    rm.to_csv('rolling-out.csv', header=True, index=True)
+    rm['traffic'].plot()
+    pylab.show()
+
+    rm.to_csv('out-week7-rolling.csv', header=True, index=True)
 
     sys.exit(0)
 

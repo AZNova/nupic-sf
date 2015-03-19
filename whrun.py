@@ -23,6 +23,7 @@ import importlib
 import sys, os
 import csv
 import datetime
+import random
 import pprint
 import pickle
 import pandas as pd
@@ -48,7 +49,7 @@ SWARM_CONFIG = {
         {
             "fieldName": "traffic",
             "fieldType": "float",
-            "maxValue": 1000.0,
+            "maxValue": 350.0,
             "minValue": 0.0
         }
     ],
@@ -57,8 +58,8 @@ SWARM_CONFIG = {
         "version": 1,
         "streams": [
             {
-                "info": "HTTP Traffic",
-                "source": "file://rolling-out.csv",
+                "info": "traffic",
+                "source": "file://out-week7-rolling.csv",
                 "columns": [ "*" ]
             }
         ]
@@ -70,12 +71,13 @@ SWARM_CONFIG = {
         "predictedField": "traffic"
     },
     "iterationCount": -1,
-    "swarmSize": "small"
+    "swarmSize": "medium"
 }
 
 SWARM_TEMP_FOLDER = "./swarmTemp"
 MODEL_PARAMS = "modelParams"
 
+#DATE_FORMAT = "%m/%d/%y %H:%M"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 _METRIC_SPECS = (
@@ -131,49 +133,59 @@ def train():
     model = ModelFactory.create(modelModule)
     model.enableInference({"predictedField": "traffic"})
 
-    # get the data into a csv reader
-    inputFile = open("rolling-out.csv", "rb")
-    csvReader = csv.reader(inputFile)
-
-    # create the output csv writer, the results
-    outputFile = open("rolling-out_train.csv", "wb" )
-    csvWriter = csv.writer( outputFile )
-    csvWriter.writerow( ['timestamp','traffic','predictedTraffic'] )
-
     counter = 0
-    for trainCounter in range(0):
-        # reset the file to position zero again
-        inputFile.seek(0)
-        csvReader.next()  # skip the header rows
-        csvReader.next()
-        csvReader.next()
+    for trainCounter in xrange(0,49):
+        file_picker = random.randint(6,8)
+        inputName = 'out-week{0}.csv'.format(file_picker)
+        outputName = 'out-week{0}_train.csv'.format(file_picker)
+        print('Reading ' + inputName)
 
-        for row in csvReader:
+        in_df = pd.read_csv(inputName, parse_dates=['timestamp'],
+                header=0, skiprows=[1,2], index_col='timestamp')
+        in_rm = pd.rolling_mean(in_df.resample("60Min", fill_method="ffill"), 
+                window=3, min_periods=1)
+
+        ts_list = []
+        tr_list = []
+        pr_list = []
+        an_list = []
+
+        for timestamp, traffic in in_rm.itertuples():
             counter += 1
 
-            timestamp = datetime.datetime.strptime( row[0], DATE_FORMAT )
-            traffic = float(row[1])
+            result = model.run({ "timestamp": timestamp,
+                "traffic": traffic })
 
-            result = model.run({ "timestamp": timestamp, "traffic": traffic })
             p1 = result.inferences["multiStepBestPredictions"][1]
             a = result.inferences["anomalyScore"]
-            csvWriter.writerow([timestamp, traffic, ' NP:'+str(p1), ' A:'+str(a)])
+
+            ts_list.append(timestamp)
+            tr_list.append(traffic)
+            pr_list.append(p1)
+            an_list.append(a)
 
             if counter % 100 == 0:
                 print("pass {0}, {1} records loaded".format(trainCounter, counter))
 
-    inputFile.close()
-    outputFile.close()
+        a_dict = {'timestamp':ts_list, 'traffic':tr_list,
+                'nextPredictedtraffic':pr_list, 'currentAnomaly':an_list}
+
+        row_df = pd.DataFrame(a_dict, columns=['traffic',
+            'nextPredictedtraffic', 'currentAnomaly'], index=ts_list)
+        row_df.index.name = 'timestamp'
+
+        row_df.to_csv(outputName, header=True, index=True)
 
     model.save( os.path.abspath( 'modelSave' ) )
+
 
 def test(args):
 
     inputName = ''
     if 'good' in args:
-        inputName = 'rolling-outGOOD.csv'
+        inputName = 'out-week9.csv'
     elif 'bad' in args:
-        inputName = 'rolling-outBAD.csv'
+        inputName = 'out-weeklyBAD.csv'
     else:
         print 'Yer killin me smalls, specify a test (good, bad)'
         return
@@ -182,6 +194,9 @@ def test(args):
 
     # load the previously trained model from disk
     model = Model.load( os.path.abspath( 'modelSave' ))
+
+    # disable learning for testing
+    model.disableLearning()
 
     # setup the metrics handling
     metricsManager = MetricsManager(_METRIC_SPECS, model.getFieldInfo(), 
@@ -217,31 +232,23 @@ def test(args):
         pr_list.append(p1)
         an_list.append(a)
 
-        # print result.metrics
-        #print result.metrics[
-        #    "multiStepBestPredictions:multiStep:"
-        #    "errorMetric='altMAPE':steps=1:window=1000:"
-        #    "field=kw_energy_consumption"]
-
     a_dict = {'timestamp':ts_list, 'traffic':tr_list,
-            'nextPredictedTraffic':pr_list, 'currentAnomaly':an_list}
-    a_dict1 = {'traffic':tr_list,
-            'nextPredictedTraffic':pr_list, 'currentAnomaly':an_list}
+            'nextPredictedtraffic':pr_list, 'currentAnomaly':an_list}
 
     row_df = pd.DataFrame(a_dict, columns=['traffic',
-        'nextPredictedTraffic', 'currentAnomaly'], index=ts_list)
+        'nextPredictedtraffic', 'currentAnomaly'], index=ts_list)
     row_df.index.name = 'timestamp'
 
-    row_df.to_csv('rolling-out_test.csv', header=True, index=True)
+    row_df.to_csv('out-week9_test.csv', header=True, index=True)
 
     # save it again, if the recently learned data needs to be updated
     # model.save( os.path.abspath( 'modelSave' ) )
 
     fig, ax1 = plt.subplots()
-    ax1.set_title('Click on thelegend to toggles lines on/off')
+    ax1.set_title('Click on the legend to toggles lines on/off')
     line1 = ax1.plot(ts_list, row_df['traffic'], 'b-', 
-            label='Traffic')
-    line2 = ax1.plot(ts_list, row_df['nextPredictedTraffic'], 'g-', 
+            label='traffic')
+    line2 = ax1.plot(ts_list, row_df['nextPredictedtraffic'], 'g-', 
             label='Prediction')
     ax1.set_xlabel('Dates')
     ax1.set_ylabel('HTTP Connections', color='b')

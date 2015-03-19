@@ -38,7 +38,7 @@ SWARM_DESCRIPTION = {
     "streams": [
       {
         "info": "HTTP Traffic",
-        "source": "file://rolling-out.csv",
+        "source": "file://rec-center-hourly_out.csv",
         "columns": [
           "*"
         ]
