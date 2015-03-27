@@ -6,10 +6,11 @@ import datetime as dt
 import matplotlib.pyplot as plt
 import pylab
 import sys
+import os
 
 
 def run():
-    df = pd.read_csv('out.csv', parse_dates=['timestamp'],
+    df = pd.read_csv('f.out', parse_dates=['timestamp'],
             header=0, skiprows=[1,2], index_col='timestamp')
     rm = pd.rolling_mean(df.resample("60Min", fill_method="ffill"), 
             window=3, min_periods=1)
@@ -19,17 +20,21 @@ def run():
     # pylab.show()
 
     import ipdb; ipdb.set_trace() # BREAKPOINT
-    kw = lambda x: x.isocalendar()[1]
+    kw = lambda x: ((x.isocalendar()[0] * 100) + x.isocalendar()[1] + 100) - 100
     by_week = df.groupby([df.index.map(kw)], sort=False)
 
-    for each_week in xrange(0, 52):
-        try:
-            by_week.get_group(each_week).to_csv('out-week{0}.csv'.format(each_week), header=True, index=True)
-            print('Created {0}'.format(each_week))
-        except KeyError, e:
-            pass
-        except:
-            raise
+    for each_year in xrange(2013, 2016):
+        for each_week in xrange(1, 53):
+            try:
+                filename = 'out-{0}{1:02d}.csv'.format(each_year, each_week)
+                if os.path.exists(filename):
+                    os.rename(filename, filename + '.bak')
+                by_week.get_group((each_year * 100) + each_week).to_csv(filename, header=True, index=True)
+                print('Created {0}'.format(filename))
+            except KeyError, e:
+                pass
+            except:
+                raise
 
         
 #    rm.to_csv('rec-center-hourly_out.csv', header=True, index=True)

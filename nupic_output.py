@@ -18,25 +18,20 @@
 #
 # http://numenta.org/licenses/
 # ----------------------------------------------------------------------
-"""
-Provides two classes with the same signature for writing data out of NuPIC
-models.
-(This is a component of the One Hot Gym Prediction Tutorial.)
-"""
 import csv
 from collections import deque
 from abc import ABCMeta, abstractmethod
-# Try to import matplotlib, but we don't have to.
-#try:
-import matplotlib
-matplotlib.use('TKAgg')
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-from matplotlib.dates import date2num
-#except ImportError:
-#  pass
+from nupic.data.inference_shifter import InferenceShifter
+# Some users might not have matplotlib, and will only be using NuPICFileOutput.
+# So we can attempt to import and swallow any import errors that occur.
+try:
+  import matplotlib.pyplot as plt
+  import matplotlib.gridspec as gridspec
+except ImportError:
+  pass
 
-WINDOW = 100
+
+WINDOW = 360
 
 
 class NuPICOutput(object):
@@ -44,14 +39,13 @@ class NuPICOutput(object):
   __metaclass__ = ABCMeta
 
 
-  def __init__(self, names, showAnomalyScore=False):
-    self.names = names
-    self.showAnomalyScore = showAnomalyScore
+  def __init__(self, name, show_anomaly_score=False):
+    self.name = name
+    self.show_anomaly_score = show_anomaly_score
 
 
   @abstractmethod
-  def write(self, timestamps, actualValues, predictedValues,
-            predictionStep=1):
+  def write(self, index, value, prediction_result, prediction_step=1):
     pass
 
 
@@ -66,44 +60,30 @@ class NuPICFileOutput(NuPICOutput):
 
   def __init__(self, *args, **kwargs):
     super(NuPICFileOutput, self).__init__(*args, **kwargs)
-    self.outputFiles = []
-    self.outputWriters = []
-    self.lineCounts = []
-    headerRow = ['timestamp', 'traffic', 'prediction']
-    for name in self.names:
-      self.lineCounts.append(0)
-      outputFileName = "%s_out.csv" % name
-      print "Preparing to output %s data to %s" % (name, outputFileName)
-      outputFile = open(outputFileName, "w")
-      self.outputFiles.append(outputFile)
-      outputWriter = csv.writer(outputFile)
-      self.outputWriters.append(outputWriter)
-      outputWriter.writerow(headerRow)
+    self.linecount = 0
+    output_filename = "%s.csv" % self.name
+    print "Preparing to output to %s" % output_filename
+    self.file = open(output_filename, 'w')
+    self.writer = csv.writer(self.file)
+    header_row = ['timestamp', 'traffic', 'prediction']
+    if self.show_anomaly_score:
+      header_row.append('anomaly score')
+    self.writer.writerow(header_row)
 
 
-
-  def write(self, timestamps, actualValues, predictedValues,
-            predictionStep=1):
-
-    assert len(timestamps) == len(actualValues) == len(predictedValues)
-
-    for index in range(len(self.names)):
-      timestamp = timestamps[index]
-      actual = actualValues[index]
-      prediction = predictedValues[index]
-      writer = self.outputWriters[index]
-
-      if timestamp is not None:
-        outputRow = [timestamp, actual, prediction]
-        writer.writerow(outputRow)
-        self.lineCounts[index] += 1
-
+  def write(self, index, value, prediction_result, prediction_step=1):
+    prediction = prediction_result.inferences\
+      ['multiStepBestPredictions'][prediction_step]
+    output_row = [index, value, prediction]
+    if self.show_anomaly_score:
+      output_row.append(prediction_result.inferences['anomalyScore'])
+    self.writer.writerow(output_row)
+    self.linecount = self.linecount + 1
 
 
   def close(self):
-    for index, name in enumerate(self.names):
-      self.outputFiles[index].close()
-      print "Done. Wrote %i data lines to %s." % (self.lineCounts[index], name)
+    self.file.close()
+    print "Done. Wrote %i data lines to %s." % (self.linecount, self.file.name)
 
 
 
@@ -112,79 +92,59 @@ class NuPICPlotOutput(NuPICOutput):
 
   def __init__(self, *args, **kwargs):
     super(NuPICPlotOutput, self).__init__(*args, **kwargs)
-    # Turn matplotlib interactive mode on.
+    # turn matplotlib interactive mode on (ion)
     plt.ion()
-    self.dates = []
-    self.convertedDates = []
-    self.actualValues = []
-    self.predictedValues = []
-    self.actualLines = []
-    self.predictedLines = []
-    self.linesInitialized = False
-    self.graphs = []
-    plotCount = len(self.names)
-    plotHeight = max(plotCount * 3, 6)
-    fig = plt.figure(figsize=(14, plotHeight))
-    gs = gridspec.GridSpec(plotCount, 1)
-    for index in range(len(self.names)):
-      self.graphs.append(fig.add_subplot(gs[index, 0]))
-      plt.title(self.names[index])
-      plt.ylabel('PHP Procecss Count')
-      plt.xlabel('Date')
-    plt.tight_layout()
+    plt.figure(figsize=(14, 10))
+    gs = gridspec.GridSpec(2, 1, height_ratios=[3,1])
+    # plot title, legend, etc
+    plt.title('HTTP Traffic prediction example')
+    plt.ylabel('traffic (hits per sec)')
+    # The shifter will align prediction and actual values.
+    self.shifter = InferenceShifter()
+    # Keep the last WINDOW predicted and actual values for plotting.
+    self.actual_history = deque([0.0] * WINDOW, maxlen=360)
+    self.predicted_history = deque([0.0] * WINDOW, maxlen=360)
+    if self.show_anomaly_score:
+      self.anomaly_score = deque([0.0] * WINDOW, maxlen=360)
+    # Initialize the plot lines that we will update with each new record.
+    if self.show_anomaly_score:
+      plt.subplot(gs[0])
+    self.actual_line, = plt.plot(range(WINDOW), self.actual_history)
+    self.predicted_line, = plt.plot(range(WINDOW), self.predicted_history)
+    plt.legend(tuple(['actual','predicted']), loc=3)
+    if self.show_anomaly_score:
+      plt.subplot(gs[1])
+      self.anomaly_score_line, = plt.plot(range(WINDOW), self.anomaly_score, 'r-')
+      plt.legend(tuple(['anomaly score']), loc=3)
+
+    # Set the y-axis range.
+    self.actual_line.axes.set_ylim(0, 100)
+    self.predicted_line.axes.set_ylim(0, 100)
+    if self.show_anomaly_score:
+      self.anomaly_score_line.axes.set_ylim(-1, 1)
 
 
 
-  def initializeLines(self, timestamps):
-    for index in range(len(self.names)):
-      print "initializing %s" % self.names[index]
-      # graph = self.graphs[index]
-      self.dates.append(deque([timestamps[index]] * WINDOW, maxlen=WINDOW))
-      self.convertedDates.append(deque(
-        [date2num(date) for date in self.dates[index]], maxlen=WINDOW
-      ))
-      self.actualValues.append(deque([0.0] * WINDOW, maxlen=WINDOW))
-      self.predictedValues.append(deque([0.0] * WINDOW, maxlen=WINDOW))
+  def write(self, index, value, prediction_result, prediction_step=1):
+    shifted_result = self.shifter.shift(prediction_result)
+    # shifted_result = prediction_result
+    # Update the trailing predicted and actual value deques.
+    inference = shifted_result.inferences\
+      ['multiStepBestPredictions'][prediction_step]
+    if inference is not None:
+      self.actual_history.append(shifted_result.rawInput['traffic'])
+      self.predicted_history.append(inference)
+      if self.show_anomaly_score:
+        anomaly_score = prediction_result.inferences['anomalyScore']
+        self.anomaly_score.append(anomaly_score)
 
-      actualPlot, = self.graphs[index].plot(
-        self.dates[index], self.actualValues[index]
-      )
-      self.actualLines.append(actualPlot)
-      predictedPlot, = self.graphs[index].plot(
-        self.dates[index], self.predictedValues[index]
-      )
-      self.predictedLines.append(predictedPlot)
-    self.linesInitialized = True
-
-
-
-  def write(self, timestamps, actualValues, predictedValues,
-            predictionStep=1):
-
-    assert len(timestamps) == len(actualValues) == len(predictedValues)
-
-    # We need the first timestamp to initialize the lines at the right X value,
-    # so do that check first.
-    if not self.linesInitialized:
-      self.initializeLines(timestamps)
-
-    for index in range(len(self.names)):
-      self.dates[index].append(timestamps[index])
-      self.convertedDates[index].append(date2num(timestamps[index]))
-      self.actualValues[index].append(actualValues[index])
-      self.predictedValues[index].append(predictedValues[index])
-
-      # Update data
-      self.actualLines[index].set_xdata(self.convertedDates[index])
-      self.actualLines[index].set_ydata(self.actualValues[index])
-      self.predictedLines[index].set_xdata(self.convertedDates[index])
-      self.predictedLines[index].set_ydata(self.predictedValues[index])
-
-      self.graphs[index].relim()
-      self.graphs[index].autoscale_view(True, True, True)
-
+    # Redraw the chart with the new data.
+    self.actual_line.set_ydata(self.actual_history)  # update the data
+    self.predicted_line.set_ydata(self.predicted_history)  # update the data
+    if self.show_anomaly_score:
+      self.anomaly_score_line.set_ydata(self.anomaly_score)  # update the data
     plt.draw()
-    plt.legend(('actual','predicted'), loc=3)
+    plt.tight_layout()
 
 
 

@@ -17,7 +17,8 @@ def run():
             lines_list.append(float(lines[idx][2]))
     import ipdb; ipdb.set_trace() # BREAKPOINT
     lines_array = numpy.array(lines_list)
-    lines_interpolated = Series(lines_array).interpolate().values
+#    lines_interpolated = Series(lines_array).interpolate().values
+    lines_interpolated = Series(lines_array).values
 
     with open('f.out', 'w') as fout:
         writer = csv.writer(fout)
