@@ -167,7 +167,6 @@ def train():
         model = ModelFactory.create(modelModule)
         model.enableInference({"predictedField": options.predicted_field})
 
-    import ipdb; ipdb.set_trace() # BREAKPOINT
     train_files = get_files(options.train_files)
     #for trainCounter in xrange(1,53):
     if options.train_passes is not None:
@@ -237,7 +236,6 @@ def train():
 
 def test():
 
-    import ipdb; ipdb.set_trace() # BREAKPOINT
     test_files = get_files(options.test_files)
 
     # load the previously trained model from disk
