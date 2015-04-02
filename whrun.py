@@ -35,6 +35,8 @@ import pylab
 import datetime as dt
 import glob
 
+from options import options
+
 from nupic.swarming import permutations_runner
 from nupic.data.inference_shifter import InferenceShifter
 from nupic.frameworks.opf.metrics import MetricSpec
@@ -73,7 +75,7 @@ SWARM_CONFIG = {
     #"inferenceType": "TemporalAnomaly",
     "inferenceType": "TemporalMultiStep",
     "inferenceArgs": {
-        "predictionSteps": [ 1 ],
+        "predictionSteps": [ 24 ],
         "predictedField": "traffic"
     },
     "iterationCount": -1,
@@ -113,6 +115,12 @@ _METRIC_SPECS = (
 
 def swarm():
     # swarm using the config and get the result params
+    SWARM_CONFIG['streamDef']['streams'][0]['source'] = \
+            "file://{0}".format(options.swarm_file)
+    SWARM_CONFIG['inferenceArgs']['predictedField'] = \
+            options.predicted_field
+    SWARM_CONFIG['swarmSize'] = \
+            options.swarm_size
     params = permutations_runner.runWithConfig(
         SWARM_CONFIG,
         { 'maxWorkers': 4, 'overwrite': True },
@@ -127,6 +135,12 @@ def swarm():
     with open( MODEL_PARAMS + ".py", 'wb' ) as paramsFile:
         paramsFile.write( 'MODEL_PARAMS = \\\n%s' % formatted )
 
+def get_files(list_or_mask):
+    if [c for c in '*?[]' if c in list_or_mask]:
+        files = sorted(glob.glob(list_or_mask))
+    else:
+        files = list_or_mask.split(',')
+    return files
 
 def train():
     # load the params module
@@ -135,16 +149,42 @@ def train():
     except ImportError:
         raise Exception( "FU buddy, no model params found" )
 
-    # create the model
-    model = ModelFactory.create(modelModule)
-    model.enableInference({"predictedField": "traffic"})
+    if options.new_model is True and options.load_last is True:
+        print("You can't have --new-model and --load-last - "
+                "try again with only one of these options!")
+        return
+    elif options.new_model is True:
+        # create the model
+        print("Creating a new model")
+        model = ModelFactory.create(modelModule)
+        model.enableInference({"predictedField": options.predicted_field})
+    elif options.load_last is True:
+        print("Loading last model from {0}".format(os.path.abspath('modelSave')))
+        model = ModelFactory.loadFromCheckpoint(os.path.abspath('modelSave'))
+    else:
+        # if neither of them are spec'ed, create the model
+        print("Creating a new model")
+        model = ModelFactory.create(modelModule)
+        model.enableInference({"predictedField": options.predicted_field})
 
-    counter = 0
-    for trainCounter in xrange(1,53):
-        #        file_picker = random.randint(6,12)
-        filename = 'out-2014{0:02d}'.format(trainCounter)
-        inputName = filename + '.csv'
-        outputName = filename + '_train.csv'
+    import ipdb; ipdb.set_trace() # BREAKPOINT
+    train_files = get_files(options.train_files)
+    #for trainCounter in xrange(1,53):
+    if options.train_passes is not None:
+        train_passes = options.train_passes
+    else:
+        train_passes = len(train_files)
+
+    for trainCounter in xrange(0, train_passes):
+        counter = 0
+        if options.train_random is True:
+            file_picker = random.randint(0, len(train_files)-1)
+        else:
+            file_picker = trainCounter % len(train_files)
+        filename = train_files[file_picker]
+        inputName = filename
+        outputName = os.path.splitext(os.path.basename(filename))[0]\
+                + '_train.csv'
         print('Reading ' + inputName)
 
         try:
@@ -167,9 +207,9 @@ def train():
             result = model.run({ "timestamp": timestamp,
                 "traffic": traffic })
 
-            p1 = result.inferences["multiStepBestPredictions"][1]
+            p1 = result.inferences["multiStepBestPredictions"][24]
             #a = result.inferences["anomalyScore"]
-            a = result.inferences['multiStepPredictions'][1][result.inferences['multiStepBestPredictions'][1]]
+            a = result.inferences['multiStepPredictions'][24][result.inferences['multiStepBestPredictions'][24]]
 
             ts_list.append(timestamp)
             tr_list.append(traffic)
@@ -178,6 +218,9 @@ def train():
 
             if counter % 100 == 0:
                 print("pass {0}, {1} records loaded".format(trainCounter, counter))
+        print("Resetting sequence.")
+        model.resetSequenceStates()
+        print("pass {0}, {1} records loaded".format(trainCounter, counter))
 
         a_dict = {'timestamp':ts_list, 'traffic':tr_list,
                 'nextPredictedtraffic':pr_list, 'currentConfidence':an_list}
@@ -186,21 +229,16 @@ def train():
             'nextPredictedtraffic', 'currentConfidence'], index=ts_list)
         row_df.index.name = 'timestamp'
 
+        print("Writing {0}".format(outputName))
         row_df.to_csv(outputName, header=True, index=True)
 
     model.save( os.path.abspath( 'modelSave' ) )
 
 
-def test(args):
+def test():
 
-    inputName = ''
-    if 'good' in args:
-        inputGlob = 'out-2015*.csv'
-    elif 'bad' in args:
-        inputName = 'out-weeklyBAD.csv'
-    else:
-        print 'Yer killin me smalls, specify a test (good, bad)'
-        return
+    import ipdb; ipdb.set_trace() # BREAKPOINT
+    test_files = get_files(options.test_files)
 
     # load the previously trained model from disk
     model = Model.load( os.path.abspath( 'modelSave' ))
@@ -249,7 +287,7 @@ def test(args):
     anomaly_score_line.axes.set_ylim(0, 1)
 
 
-    for inputName in glob.glob(inputGlob):
+    for inputName in test_files:
         print("Opening {0}".format(inputName))
         in_df = pd.read_csv(inputName, parse_dates=['timestamp'],
                 header=0, skiprows=[1,2], index_col='timestamp')
@@ -269,13 +307,13 @@ def test(args):
             shifted_result = shifter.shift(result)
 
             # Update the trailing predicted and actual value deques.
-            inference = shifted_result.inferences['multiStepBestPredictions'][1]
+            inference = shifted_result.inferences['multiStepBestPredictions'][24]
             if inference is not None:
                 # Redraw the chart with the new data.
                 actual_history.append(shifted_result.rawInput['traffic'])
                 predicted_history.append(inference)
                 #anomaly_score = result.inferences['anomalyScore']
-                anomaly_score = result.inferences['multiStepPredictions'][1][result.inferences['multiStepBestPredictions'][1]]
+                anomaly_score = result.inferences['multiStepPredictions'][24][result.inferences['multiStepBestPredictions'][24]]
                 anomaly_score_history.append(anomaly_score)
 #                ts_history.append(timestamp)
 
@@ -283,7 +321,7 @@ def test(args):
                 tr_list.append(shifted_result.rawInput['traffic'])
                 pr_list.append(inference)
                 #an_list.append(result.inferences['anomalyScore'])
-                an_list.append(result.inferences['multiStepPredictions'][1][result.inferences['multiStepBestPredictions'][1]])
+                an_list.append(result.inferences['multiStepPredictions'][24][result.inferences['multiStepBestPredictions'][24]])
 
                 # Redraw the chart with the new data.
                 actual_line.set_ydata(actual_history)  # update the data
@@ -303,7 +341,8 @@ def test(args):
         'nextPredictedtraffic', 'currentConfidence'], index=ts_list)
     row_df.index.name = 'timestamp'
 
-    row_df.to_csv('out-march_test.csv', header=True, index=True)
+    print("Writing {0}".format(options.test_out))
+    row_df.to_csv(options.test_out, header=True, index=True)
 
     # save it again, if the recently learned data needs to be updated
     # model.save( os.path.abspath( 'modelSave' ) )
@@ -381,12 +420,15 @@ def test(args):
 
 if __name__ == "__main__":
 
-  args = sys.argv[1:]
-  if "swarm" in args:
+    # TODO: Add optparse for
+    # --swarm=<file>
+    # --train=<file list or glob>
+    # --test=<file list or glob>
+  if options.swarm_file is not None:
       swarm()
 
-  if "train" in args:
+  if options.train_files is not None:
       train()
 
-  if "test" in args:
-      test( args )
+  if options.test_files is not None:
+      test()
