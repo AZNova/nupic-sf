@@ -28,6 +28,10 @@ train_group.add_option('-m', '--train-random',
         help='Randomize the order of the training files - default [%default]', 
         dest='train_random', 
         action='store_true', default=False)
+train_group.add_option('-x', '--prediction-steps', 
+        help='Time steps to predict', 
+        dest='prediction_steps_list', metavar='<STEP1,STEP2,...', 
+        action='store')
 train_group.add_option('-n', '--new-model', 
         help='Reset model and create new - default [%default]', 
         dest='new_model', 

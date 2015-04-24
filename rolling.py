@@ -8,8 +8,9 @@ import pylab
 import sys
 
 
-def run():
-    df = pd.read_csv('out-week7.csv', parse_dates=['timestamp'],
+def run(filename):
+    import ipdb; ipdb.set_trace() # BREAKPOINT
+    df = pd.read_csv(filename + '.csv', parse_dates=['timestamp'],
             header=0, skiprows=[1,2], index_col='timestamp')
     rm = pd.rolling_mean(df.resample("60Min", fill_method="ffill"), 
             window=3, min_periods=1)
@@ -48,6 +49,6 @@ def run():
             writer.writerow([lines[idx][1], lines_interpolated[idx]])
 
 if __name__ == "__main__":
-    run()
+    run(sys.argv[1])
 
 
